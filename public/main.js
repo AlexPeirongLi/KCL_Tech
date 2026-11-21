@@ -33,7 +33,7 @@ const pageEl = $('page'), pageTitle = $('page-title'), pageBody = $('page-body')
 // WebGL draws the world at low resolution. Live websites are real iframes placed
 // in 3D with a CSS matrix, in a layer *behind* the canvas; each active signboard
 // punches a transparent hole in the canvas so the page shows through.
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true, logarithmicDepthBuffer: true });
 renderer.setPixelRatio(1);
 renderer.autoClear = false;
 renderer.setClearColor(SKY, 1);
@@ -66,8 +66,8 @@ function retro(material) {
     shader.vertexShader = shader.vertexShader.replace(
       '#include <project_vertex>',
       `#include <project_vertex>
-       gl_Position.xy = floor(gl_Position.xy / gl_Position.w * vec2(200.0, 150.0) + 0.5)
-                        / vec2(200.0, 150.0) * gl_Position.w;`
+       gl_Position.xy = floor(gl_Position.xy / gl_Position.w * vec2(320.0, 240.0) + 0.5)
+                        / vec2(320.0, 240.0) * gl_Position.w;`
     );
   };
   return material;
@@ -75,7 +75,8 @@ function retro(material) {
 
 function pixelTexture(c) {
   const tex = new THREE.CanvasTexture(c);
-  tex.magFilter = tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestMipmapNearestFilter;   // less shimmer far away, still pixel-sharp
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
@@ -187,7 +188,8 @@ const nearby = (x, z) => grid.get(cellKey(Math.floor(x / CELL), Math.floor(z / C
 /** Adds a solid box you can stand on and collide with. (x, z) centre, y0 bottom. */
 const blockSpecs = [];
 function addBlock(x, y0, z, w, h, d, mat = whiteMat, extra = {}) {
-  blockSpecs.push({ x, y: y0 + h / 2, z, w, h, d, mat });
+  const lift = (blockSpecs.length % 6) * 0.012;   // visual only; the collider keeps the true height
+  blockSpecs.push({ x, y: y0 + (h + lift) / 2, z, w, h: h + lift, d, mat });
   const c = { minX: x - w / 2, maxX: x + w / 2, minY: y0, maxY: y0 + h, minZ: z - d / 2, maxZ: z + d / 2, ...extra };
   colliders.push(c);
   for (let cx = Math.floor((c.minX - 1) / CELL); cx <= Math.floor((c.maxX + 1) / CELL); cx++) {
@@ -382,8 +384,8 @@ function buildBridges() {
 // ---------- Signboards ----------
 const signs = [];   // { name, url, x, y, z, face, centre, normal, screen, group, dest?, question?, near? }
 const SCREEN_Y = 2.5 + SIGN_H / 2;   // screen centre above the ground
-const frameMat = retro(new THREE.MeshLambertMaterial({ color: INK, flatShading: true }));
-const destFrameMat = retro(new THREE.MeshLambertMaterial({ color: ACCENT, flatShading: true }));
+const frameMat = new THREE.MeshLambertMaterial({ color: INK, flatShading: true });
+const destFrameMat = new THREE.MeshLambertMaterial({ color: ACCENT, flatShading: true });
 // Shown while a sign is too far away to be worth loading.
 const idleScreenMat = (() => {
   const c = document.createElement('canvas');
@@ -415,15 +417,15 @@ function makeSign({ name, url, x, y, z, face, dest = false }) {
   group.position.set(x, y, z);
   group.rotation.y = face;
   const back = new THREE.Mesh(backGeo, dest ? destFrameMat : frameMat);
-  back.position.set(0, SCREEN_Y, -0.3);
+  back.position.set(0, SCREEN_Y, -0.5);
   const screen = new THREE.Mesh(screenGeo, idleScreenMat);
   screen.position.set(0, SCREEN_Y, 0);
   const head = new THREE.Mesh(headGeo, new THREE.MeshBasicMaterial({ map: labelTexture(name, dest ? '#d02818' : '#1c1c1c') }));
-  head.position.set(0, SCREEN_Y + SIGN_H / 2 + 1.6, 0);
+  head.position.set(0, SCREEN_Y + SIGN_H / 2 + 1.6, -0.2);
   group.add(back, screen, head);
   for (const sx of [-SIGN_W / 2 + 1, SIGN_W / 2 - 1]) {
     const post = new THREE.Mesh(postGeo, dest ? destFrameMat : frameMat);
-    post.position.set(sx, SCREEN_Y / 2, -0.4);
+    post.position.set(sx, SCREEN_Y / 2, -0.6);
     group.add(post);
   }
   scene.add(group);
@@ -491,6 +493,8 @@ frontCanvas.width = frontCanvas.height = 128;
 const backCanvas = document.createElement('canvas');
 backCanvas.width = backCanvas.height = 256;
 const frontTex = pixelTexture(frontCanvas), backTex = pixelTexture(backCanvas);
+frontTex.minFilter = backTex.minFilter = THREE.NearestFilter;   // always seen close up: keep them crisp
+frontTex.generateMipmaps = backTex.generateMipmaps = false;
 
 const rig = new THREE.Group();          // moves between "held low" and "raised to read"
 const compassBody = new THREE.Group();  // flips over to show the back
@@ -500,20 +504,20 @@ const compassBody = new THREE.Group();  // flips over to show the back
   l.position.set(-0.5, 1, 1);
   handScene.add(l);
 
-  const brass = retro(new THREE.MeshLambertMaterial({ color: 0xb59a5a, flatShading: true }));
-  const rim = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.22, 16), brass);
+  const brass = new THREE.MeshLambertMaterial({ color: 0xb59a5a, flatShading: true });
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.22, 24), brass);
   rim.rotation.x = Math.PI / 2;
-  const front = new THREE.Mesh(new THREE.CircleGeometry(0.92, 24), new THREE.MeshBasicMaterial({ map: frontTex }));
-  front.position.z = 0.115;
-  const back = new THREE.Mesh(new THREE.CircleGeometry(0.92, 24), new THREE.MeshBasicMaterial({ map: backTex }));
-  back.position.z = -0.115;
+  const front = new THREE.Mesh(new THREE.CircleGeometry(0.9, 24), new THREE.MeshBasicMaterial({ map: frontTex }));
+  front.position.z = 0.13;
+  const back = new THREE.Mesh(new THREE.CircleGeometry(0.9, 24), new THREE.MeshBasicMaterial({ map: backTex }));
+  back.position.z = -0.13;
   back.rotation.y = Math.PI;
   const loop = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.05, 4, 8), brass);
   loop.position.y = 1.12;
   compassBody.add(rim, front, back, loop);
 
-  const skin = retro(new THREE.MeshLambertMaterial({ color: 0xe9c4a4, flatShading: true }));
-  const sleeve = retro(new THREE.MeshLambertMaterial({ color: 0x3b3f4a, flatShading: true }));
+  const skin = new THREE.MeshLambertMaterial({ color: 0xe9c4a4, flatShading: true });
+  const sleeve = new THREE.MeshLambertMaterial({ color: 0x3b3f4a, flatShading: true });
   const box = (w, h, d, mat, x, y, z, rz = 0, rx = 0) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
     m.position.set(x, y, z);
@@ -523,14 +527,14 @@ const compassBody = new THREE.Group();  // flips over to show the back
   const hand = new THREE.Group();
   hand.add(
     // Open palm with the compass resting in it: four fingers behind, thumb on the rim.
-    box(1.9, 1.9, 0.36, skin, 0, -0.55, -0.34),                  // palm
-    box(0.44, 1.25, 0.34, skin, -0.72, 0.9, -0.34),              // index
-    box(0.44, 1.45, 0.34, skin, -0.24, 1.0, -0.34),              // middle
-    box(0.44, 1.35, 0.34, skin, 0.24, 0.95, -0.34),              // ring
-    box(0.42, 1.05, 0.34, skin, 0.71, 0.8, -0.34),               // little
-    box(0.42, 1.1, 0.36, skin, -1.05, -0.45, -0.02, 0.3),        // thumb
-    box(1.3, 0.6, 0.5, skin, 0, -1.75, -0.32),                   // wrist
-    box(1.6, 3.2, 0.85, sleeve, 0, -3.6, -0.32)                  // sleeve running off-screen
+    box(1.9, 1.9, 0.36, skin, 0, -0.55, -0.36),                  // palm
+    box(0.44, 1.05, 0.32, skin, -0.72, 0.94, -0.36),             // index
+    box(0.44, 1.25, 0.32, skin, -0.24, 1.04, -0.36),             // middle
+    box(0.44, 1.15, 0.32, skin, 0.24, 0.99, -0.36),              // ring
+    box(0.42, 0.85, 0.32, skin, 0.71, 0.84, -0.36),              // little
+    box(0.4, 1.0, 0.3, skin, -1.2, -0.35, -0.1, 0.3),            // thumb, beside the rim
+    box(1.3, 0.5, 0.3, skin, 0, -1.76, -0.36),                   // wrist
+    box(1.6, 3.2, 0.85, sleeve, 0, -3.62, -0.36)                 // sleeve running off-screen
   );
   rig.add(hand, compassBody);
   handScene.add(rig);
