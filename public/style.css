@@ -146,3 +146,34 @@ html, body {
 #start p { margin: 0 0 12px; line-height: 1.5; }
 
 .hidden { display: none !important; }
+
+/* Wiki Race */
+#race-hud {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  font: bold 14px "Courier New", monospace;
+  text-transform: uppercase;
+  color: #fff;
+  background: #d02818;
+  border: 2px solid #1c1c1c;
+  box-shadow: 2px 2px 0 #1c1c1c;
+  padding: 4px 10px;
+  max-width: 94vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+#start .small { font-size: 12px; margin: 12px 0 0; }
+#start button { margin-right: 6px; }
+
+/* Wiki Race results and leaderboard */
+#page-body .save { display: flex; gap: 6px; margin: 10px 0; font: 14px "MS Sans Serif", Tahoma, sans-serif; }
+#page-body .save input { flex: 1; min-width: 0; padding: 2px 6px; font: inherit; border: 2px solid; border-color: #404040 #fff #fff #404040; }
+#page-body table { width: 100%; border-collapse: collapse; font: 13px "Courier New", monospace; white-space: normal; }
+#page-body th, #page-body td { text-align: left; padding: 2px 6px; border-bottom: 1px solid #c0c0c0; }
+#page-body tr.you td { background: #ffe9a8; font-weight: bold; }
+#page-body h4 { margin: 12px 0 4px; font: bold 14px "MS Sans Serif", Tahoma, sans-serif; }

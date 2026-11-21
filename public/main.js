@@ -451,7 +451,8 @@ function activate(sign) {
   activeSign = sign;
   if (!sign) return;
   const frame = document.createElement('iframe');
-  frame.src = sign.url;
+  if (sign.html != null) frame.srcdoc = sign.html;   // our own page (Wiki Race)
+  else frame.src = sign.url;
   frame.title = sign.name;
   frame.referrerPolicy = 'no-referrer';
   frame.style.cssText = `width:${SIGN_PX}px;height:${SIGN_PX * SIGN_H / SIGN_W}px;border:0;background:#fff;position:absolute;left:0;top:0;transform-origin:0 0;visibility:hidden`;
@@ -723,6 +724,8 @@ sitesEl.addEventListener('pointerdown', (e) => {
 
 addEventListener('keydown', (e) => {
   if (!startEl.classList.contains('hidden')) return;
+  if (e.target.id === 'race-name') return;   // typing a name for the leaderboard
+  if (race.on && e.code === 'KeyN' && !inspecting) { e.preventDefault(); startRace(); return; }
   if (browsing) {
     if (e.code === 'Escape' || e.code === 'KeyF') { e.preventDefault(); stopBrowsing(); }
     return;
@@ -739,7 +742,7 @@ addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyE') {
     e.preventDefault();   // keep the "e" out of the question
-    openCompass();
+    if (!race.on) openCompass();   // in a race, only clicked links set the compass
     return;
   }
   if (e.code === 'Escape') { closePage(); return; }
@@ -999,6 +1002,7 @@ function askGuide(sign) {
 }
 
 // ---------- Main loop ----------
+const race = { on: false, done: false, sign: null, start: '', target: '', current: '', clicks: 0, began: 0, path: [] };
 const clock = new THREE.Clock();
 const lerp = (a, b, t) => a + (b - a) * t;
 const smooth = (t) => t * t * (3 - 2 * t);
@@ -1076,10 +1080,11 @@ function tick() {
       if (dist < ARRIVE_DIST && Math.abs(p.y - target.y) < 3) {
         target.visited = true;
         destEl.textContent = `Arrived > ${target.question}`;
+        if (race.on) raceArrived();
       }
     }
   } else {
-    destEl.textContent = '[E] Turn the compass over to ask';
+    destEl.textContent = race.on ? '' : '[E] Turn the compass over to ask';
   }
   if (inspecting) destEl.textContent = 'Type your question';
   if (browsing) destEl.textContent = '';   // keep the page clear while you read it
@@ -1125,3 +1130,240 @@ Object.assign(player.safe, { x: player.x, y: player.y, z: player.z });
 drawCompassBack('');
 window.vectorWeb = { player, islands, signs, colliders, bridges, hubs, keys, physicsStep, nearby, get target() { return target; } }; // handy in the console
 tick();
+
+// ---------- Wiki Race mode ----------
+// Start on one Wikipedia article and reach the target using only the links
+// in each article. The board shows our own copy of the article (fetched from
+// Wikipedia's public API) so that link clicks can be counted and followed.
+const RACE_TOPICS = ['Black hole', 'Jazz', 'Pizza', 'Roman Empire', 'Chess', 'Volcano', 'DNA',
+  'William Shakespeare', 'Tokyo', 'Association football', 'Moon', 'Dinosaur', 'Chocolate', 'Internet',
+  'Albert Einstein', 'Olympic Games', 'Ancient Egypt', 'Coffee', 'Piano', 'Mount Everest',
+  'Photosynthesis', 'Samurai', 'The Beatles', 'Artificial intelligence', 'Octopus', 'Printing press',
+  'Antarctica', 'Sushi', 'Mathematics', 'London', 'Video game', 'Rainbow', 'Vikings', 'Skateboarding',
+  'Philosophy', 'Electricity', 'Titanic', 'Dream', 'Gravity', 'Honey'];
+const raceHud = $('race-hud');
+const sameTitle = (a, b) => a.replace(/_/g, ' ').trim().toLowerCase() === b.replace(/_/g, ' ').trim().toLowerCase();
+const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function racePage(title, bodyHtml) {
+  return `<!doctype html><html><head><meta charset="utf-8"><base href="https://en.wikipedia.org/">
+<style>
+  body { font: 15px/1.5 sans-serif; margin: 0; color: #202122; background: #fff; }
+  .bar { position: sticky; top: 0; background: #d02818; color: #fff; font: bold 13px "Courier New", monospace;
+         padding: 6px 12px; text-transform: uppercase; z-index: 5; }
+  main { padding: 4px 16px 40px; }
+  h1 { font: 28px Georgia, serif; border-bottom: 1px solid #a2a9b1; margin: 10px 0; }
+  h2 { font: 22px Georgia, serif; border-bottom: 1px solid #a2a9b1; }
+  a { color: #36c; text-decoration: none; } a:hover { text-decoration: underline; }
+  img { max-width: 100%; height: auto; }
+  .infobox, .thumb, figure { float: right; clear: right; max-width: 250px; margin: 0 0 10px 14px; font-size: 12px; }
+  .infobox { border: 1px solid #a2a9b1; background: #f8f9fa; }
+  table { font-size: 13px; }
+  .navbox, .mw-editsection, .reflist, .references, .sistersitebox, .metadata, .ambox, .hatnote,
+  .noprint, .mw-empty-elt, style, .reference { display: none !important; }
+</style></head><body>
+<div class="bar">Target: ${escapeHtml(race.target)}</div>
+<main><h1>${escapeHtml(title)}</h1>${bodyHtml}</main>
+<script>
+  // Every click stays inside the race: article links are reported to the game,
+  // in-page anchors scroll, and everything else is ignored.
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a');
+    if (!a) return;
+    e.preventDefault();
+    var href = a.getAttribute('href') || '';
+    if (href.charAt(0) === '#') {
+      var el = document.getElementById(decodeURIComponent(href.slice(1)));
+      if (el) el.scrollIntoView();
+      return;
+    }
+    var m = href.match(new RegExp('^/wiki/([^#?]+)'));
+    if (!m) return;
+    var t = decodeURIComponent(m[1]);
+    if (t.indexOf(':') !== -1) return;   // File:, Help:, Category: and so on are not articles
+    parent.postMessage({ raceLink: t }, '*');
+  });
+  // Keys pressed while the page has focus still reach the game.
+  document.addEventListener('keydown', function (e) {
+    if (e.code === 'Escape' || e.code === 'KeyN') parent.postMessage({ raceKey: e.code }, '*');
+  });
+<\/script></body></html>`;
+}
+
+function showRacePage(html) {
+  race.sign.html = html;
+  if (race.sign.site) race.sign.site.srcdoc = html;
+}
+
+async function loadRaceArticle(title) {
+  showRacePage(racePage(title, '<p>Loading...</p>'));
+  try {
+    const res = await fetch('https://en.wikipedia.org/w/api.php?action=parse&format=json&origin=*&redirects=1' +
+      '&prop=text&disableeditsection=1&page=' + encodeURIComponent(title));
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.info);
+    race.current = data.parse.title;
+    race.path.push(race.current);
+    showRacePage(racePage(race.current, data.parse.text['*']));
+  } catch (err) {
+    showRacePage(racePage(title, `<p>Could not load this article (${escapeHtml(String(err.message || err))}). Pick another link, or press N for a new race.</p>`));
+  }
+}
+
+function startRace() {
+  race.on = true;
+  race.done = false;
+  if (!race.sign) {
+    // A red board in front of where you start.
+    race.sign = makeSign({ name: 'Wiki Race', url: 'about:blank', x: home.x, y: home.y, z: home.z + 12, face: 0, dest: true });
+    race.sign.html = '';
+  }
+  const pick = () => RACE_TOPICS[Math.floor(Math.random() * RACE_TOPICS.length)];
+  race.start = pick();
+  do { race.target = pick(); } while (race.target === race.start);
+  race.current = race.start;
+  race.clicks = 0;
+  race.path = [];
+  race.began = performance.now();
+  target = null;
+  beam.visible = false;
+  drawCompassBack('');
+  if (activeSign === race.sign) activate(null);
+  Object.assign(race.sign, { x: home.x, y: home.y, z: home.z + 12, face: 0 });
+  race.sign.group.position.set(home.x, home.y, home.z + 12);
+  race.sign.group.rotation.y = 0;
+  race.sign.centre.set(home.x, home.y + SCREEN_Y, home.z + 12);
+  race.sign.normal.set(0, 0, 1);
+  closePage();
+  raceHud.classList.remove('hidden');
+  Object.assign(player, { x: home.x, y: home.y, z: home.z + 30, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0.1 });
+  loadRaceArticle(race.start);
+  startBrowsing(race.sign);
+}
+
+// Clicking a link does not open it: it goes onto your compass. The board moves
+// to wherever that topic lives in the world, and you have to get there.
+async function raceTravel(title) {
+  stopBrowsing();
+  race.current = title;
+  drawCompassBack(title);   // the link is etched onto the compass for you
+  let spot;
+  try {
+    const res = await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: title }),
+    });
+    spot = (await res.json()).target;
+  } catch { spot = { x: race.sign.x, y: race.sign.y, z: race.sign.z }; }
+  const face = Math.atan2(player.x - spot.x, player.z - spot.z);   // board faces the way you arrive
+  if (activeSign === race.sign) activate(null);
+  const sg = race.sign;
+  Object.assign(sg, { x: spot.x, y: spot.y, z: spot.z, face });
+  sg.group.position.set(spot.x, spot.y, spot.z);
+  sg.group.rotation.y = face;
+  sg.centre.set(spot.x, spot.y + SCREEN_Y, spot.z);
+  sg.normal.set(Math.sin(face), 0, Math.cos(face));
+  target = { x: spot.x, y: spot.y, z: spot.z, question: title, near: [], visited: false, sign: null };
+  beam.position.set(spot.x - Math.sin(face) * 1.5, spot.y + 450 + SCREEN_Y + SIGN_H / 2 + 3, spot.z - Math.cos(face) * 1.5);
+  beam.visible = true;
+  loadRaceArticle(title);   // ready on the board by the time you get there
+}
+
+function raceArrived() {
+  if (sameTitle(race.current, race.target)) finishRace();
+}
+
+// Speedrun clock: minutes, seconds and hundredths.
+const raceTime = (ms) => {
+  const cs = Math.floor(ms / 10);
+  return `${Math.floor(cs / 6000)}:${String(Math.floor(cs / 100) % 60).padStart(2, '0')}.${String(cs % 100).padStart(2, '0')}`;
+};
+
+function showLeaderboard(rows, you) {
+  pageBody.querySelector('.board')?.remove();
+  const box = document.createElement('div');
+  box.className = 'board';
+  const h = document.createElement('h4');
+  h.textContent = 'Leaderboard: fastest races';
+  const table = document.createElement('table');
+  table.innerHTML = '<tr><th>#</th><th>Name</th><th>Time</th><th>Clicks</th><th>Route</th></tr>';
+  rows.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    if (you && r.at === you.at && r.name === you.name) tr.className = 'you';
+    for (const cell of [i + 1, r.name, raceTime(r.ms), r.clicks, `${r.start} > ${r.target}`]) {
+      const td = document.createElement('td');
+      td.textContent = cell;
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  });
+  if (!rows.length) table.innerHTML += '<tr><td colspan="5">No scores yet. Be the first.</td></tr>';
+  box.append(h, table);
+  pageBody.appendChild(box);
+}
+
+async function finishRace() {
+  race.done = true;
+  race.ms = Math.round(performance.now() - race.began);
+  document.exitPointerLock?.();
+  setLooking(false);
+  pageTitle.textContent = 'You made it!';
+  pageBody.textContent = '';
+  const summary = document.createElement('div');
+  summary.textContent = `${race.start} to ${race.target}\nTime: ${raceTime(race.ms)}   Clicks: ${race.clicks}\nRoute: ${race.path.join('  >  ')}`;
+  const save = document.createElement('form');
+  save.className = 'save';
+  const input = document.createElement('input');
+  input.id = 'race-name';
+  input.maxLength = 16;
+  input.placeholder = 'Your name';
+  try { input.value = localStorage.getItem('raceName') || ''; } catch {}
+  const btn = document.createElement('button');
+  btn.textContent = 'Save score';
+  save.append(input, btn);
+  save.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    try { localStorage.setItem('raceName', input.value); } catch {}
+    try {
+      const res = await fetch('/api/leaderboard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: input.value, start: race.start, target: race.target, clicks: race.clicks, ms: race.ms }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      showLeaderboard(data.top, data.you);
+      btn.textContent = 'Saved';
+    } catch { btn.disabled = false; btn.textContent = 'Try again'; }
+  });
+  pageBody.append(summary, save);
+  pageStatus.textContent = 'Press N for a new race';
+  pageEl.classList.remove('hidden');
+  // The leaderboard loads as soon as you finish.
+  try { showLeaderboard(await (await fetch('/api/leaderboard')).json()); } catch {}
+}
+
+addEventListener('message', (e) => {
+  if (!race.on || !race.sign || e.source !== race.sign.site?.contentWindow) return;
+  const d = e.data || {};
+  if (d.raceKey === 'KeyN') startRace();
+  else if (d.raceKey === 'Escape') stopBrowsing();
+  else if (typeof d.raceLink === 'string' && !race.done) {
+    race.clicks++;
+    raceTravel(d.raceLink.replace(/_/g, ' '));
+  }
+});
+
+setInterval(() => {
+  if (!race.on) return;
+  const time = raceTime(race.done ? race.ms : performance.now() - race.began);
+  raceHud.textContent = `${time} | ${race.start} > ${race.target} | Clicks ${race.clicks}` +
+    (browsing || race.done ? '' : ' | F to use the board');
+}, 50);
+
+$('race').addEventListener('click', () => {
+  startEl.classList.add('hidden');
+  startRace();
+});
